@@ -1,4 +1,3 @@
-
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -111,8 +110,20 @@ async def receive_earnings(req: ReceiveEarnings):
         logger.info(f"RECEIVE: {req.amountETH:.6f} ETH from {req.userWallet}")
         
         if req.userWallet and req.userWallet != "not_connected":
-            user_credits[req.userWallet] = user_credits.get(req.userWallet, 0) + req.amountETH
-            logger.info(f"User {req.userWallet[:10]}... credits: {user_credits[req.userWallet]:.6f}")
+            wallet_lower = req.userWallet.lower()
+            
+            existing_key = None
+            for key in user_credits:
+                if key.lower() == wallet_lower:
+                    existing_key = key
+                    break
+            
+            if existing_key:
+                user_credits[existing_key] += req.amountETH
+                logger.info(f"Updated {existing_key[:10]}... credits: {user_credits[existing_key]:.6f}")
+            else:
+                user_credits[req.userWallet] = req.amountETH
+                logger.info(f"New user {req.userWallet[:10]}... credits: {req.amountETH:.6f}")
         
         balance = None
         if web3 and treasury_addr and web3_ready:
@@ -145,14 +156,22 @@ async def claim_earnings(req: ClaimEarnings):
         raise HTTPException(503, "Treasury not initialized")
     
     try:
-        user_addr = req.userWallet
+        user_addr = req.userWallet.strip()
         
         if web3:
             if not web3.is_address(user_addr):
                 raise HTTPException(400, "Invalid address")
             user_addr = web3.to_checksum_address(user_addr)
         
-        credits = user_credits.get(user_addr, 0)
+        wallet_lower = user_addr.lower()
+        credits = 0
+        existing_key = None
+        
+        for key in user_credits:
+            if key.lower() == wallet_lower:
+                existing_key = key
+                credits = user_credits[key]
+                break
         
         if credits < req.amountETH:
             raise HTTPException(400, f"Need {req.amountETH:.6f}, have {credits:.6f}")
@@ -186,7 +205,8 @@ async def claim_earnings(req: ClaimEarnings):
                 'ether'
             ))
             
-            user_credits[user_addr] -= req.amountETH
+            if existing_key:
+                user_credits[existing_key] -= req.amountETH
             
             logger.info(f"Confirmed! Block: {receipt['blockNumber']}")
             
@@ -198,7 +218,7 @@ async def claim_earnings(req: ClaimEarnings):
                 "amountSent": req.amountETH,
                 "recipient": user_addr,
                 "etherscanUrl": f"https://etherscan.io/tx/{tx_hash.hex()}",
-                "user_remaining_credits": user_credits.get(user_addr, 0),
+                "user_remaining_credits": user_credits.get(existing_key, 0) if existing_key else 0,
                 "timestamp": datetime.now().isoformat()
             }
         else:
@@ -317,4 +337,3 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", 8000))
     logger.info(f"Starting on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
-
