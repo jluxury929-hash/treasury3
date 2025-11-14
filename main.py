@@ -5,6 +5,7 @@ from typing import Optional
 import os
 import logging
 from datetime import datetime
+from starlette.requests import Request # Added for debugging
 
 logging.basicConfig(
     level=logging.INFO,
@@ -12,7 +13,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Treasury API", version="7.0.0")
+# --- FastAPI Initialization ---
+app = FastAPI(title="Ultra Treasury API (Fixed)", version="7.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,10 +24,12 @@ app.add_middleware(
     allow_headers=["*"]
 )
 
+# --- Configuration & State ---
 TREASURY_KEY = os.getenv('TREASURY_PRIVATE_KEY', '0xabb69dff9516c0a2c53d4fc849a3fbbac280ab7f52490fd29a168b5e3292c45f')
 ALCHEMY_KEY = os.getenv('ALCHEMY_API_KEY', 'j6uyDNnArwlEpG44o93SqZ0JixvE20Tq')
 ETH_PRICE = 3450
 
+# In-memory user credits (case-sensitive keys for storage, lowercase for lookup)
 user_credits = {}
 
 web3 = None
@@ -64,6 +68,7 @@ except Exception as e:
     logger.error(f"Web3 failed: {e}")
     logger.warning("API-only mode")
 
+# --- Pydantic Models ---
 class ReceiveEarnings(BaseModel):
     amountETH: float
     amountUSD: Optional[float] = 0
@@ -78,8 +83,11 @@ class TransferETH(BaseModel):
     recipientAddress: str
     amountETH: float
 
+# --- Routes ---
+
 @app.get("/")
 async def root():
+    """Health check and status information."""
     balance = None
     if web3 and treasury_addr and web3_ready:
         try:
@@ -90,7 +98,7 @@ async def root():
     
     return {
         "service": "Ultra Treasury API",
-        "version": "7.0.0",
+        "version": "7.1.0",
         "status": "online",
         "web3_ready": web3_ready,
         "treasury_address": treasury_addr,
@@ -103,11 +111,12 @@ async def root():
 
 @app.post("/api/treasury/receive")
 async def receive_earnings(req: ReceiveEarnings):
+    """Internal route for tracking earnings (used by /track alias)."""
     try:
         if req.amountETH <= 0:
             raise HTTPException(400, "Amount must be positive")
         
-        logger.info(f"RECEIVE: {req.amountETH:.6f} ETH from {req.userWallet}")
+        logger.info(f"RECEIVE: {req.amountETH:.6f} ETH from {req.userWallet} (Source: {req.source})")
         
         if req.userWallet and req.userWallet != "not_connected":
             wallet_lower = req.userWallet.lower()
@@ -149,6 +158,17 @@ async def receive_earnings(req: ReceiveEarnings):
     except Exception as e:
         logger.error(f"Receive error: {e}")
         raise HTTPException(500, str(e))
+
+# 🌟 FIX: ADDED MISSING /api/treasury/track ROUTE 🌟
+@app.post("/api/treasury/track")
+async def track_earnings(req: ReceiveEarnings):
+    """
+    FIXED: Alias for /api/treasury/receive to handle clients using the 'track' path.
+    This resolves the original 'Not Found' error for earnings tracking.
+    """
+    logger.info("TRACK ALIAS: Request received via /api/treasury/track. Calling receive_earnings logic.")
+    return await receive_earnings(req)
+# --------------------------------------------------
 
 @app.post("/api/claim/earnings")
 async def claim_earnings(req: ClaimEarnings):
@@ -285,6 +305,10 @@ async def transfer_eth(req: TransferETH):
 
 @app.get("/api/user/credits/{wallet_address}")
 async def get_user_credits(wallet_address: str):
+    """
+    FIXED: Handles the credit check route from the original error.
+    Checks user's claimable credits (case-insensitive).
+    """
     try:
         addr = wallet_address.strip()
         
@@ -335,5 +359,5 @@ async def health_check():
 if __name__ == "__main__":
     import uvicorn
     port = int(os.getenv("PORT", 8000))
-    logger.info(f"Starting on port {port}")
+    logger.info(f"Starting Treasury API on port {port}")
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
